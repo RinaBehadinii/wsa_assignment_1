@@ -52,6 +52,13 @@ class Product(models.Model):
     def __str__(self):
         return self.name
 
+    def update_stock(self, quantity_sold):
+        if self.quantity >= quantity_sold:
+            self.quantity -= quantity_sold
+            self.save()
+            return True
+        return False
+
 
 class Role(models.Model):
     name = models.CharField(max_length=50, unique=True)
@@ -68,12 +75,17 @@ class Order(models.Model):
         ('Delivered', 'Delivered'),
     ]
 
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='orders')  # Updated to user
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='orders')
     order_date = models.DateTimeField(auto_now_add=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='Pending')
 
     def __str__(self):
         return f"Order {self.id} - {self.user.username}"
+
+    def update_status(self, new_status):
+        if new_status in dict(self.STATUS_CHOICES).keys():
+            self.status = new_status
+            self.save()
 
 
 class OrderDetail(models.Model):

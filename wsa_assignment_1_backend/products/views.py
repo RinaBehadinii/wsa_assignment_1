@@ -1,4 +1,5 @@
 from django.contrib.auth.models import User, Group
+from django.db import transaction
 from django.db.models import Sum
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -20,7 +21,7 @@ from .permissions import IsAdmin, IsAdvancedUser
 
 
 class RegisterView(APIView):
-    permission_classes = []  # Allow anyone to access this endpoint
+    permission_classes = []
 
     def post(self, request):
         username = request.data.get('username')
@@ -36,7 +37,7 @@ class RegisterView(APIView):
 
         try:
             simple_user_group, created = Group.objects.get_or_create(name="Simple User")
-            user.groups.add(simple_user_group)  # Add the user to the "Simple User" group
+            user.groups.add(simple_user_group)
         except Exception as e:
             return Response({'error': f'Could not assign default group: {str(e)}'},
                             status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -90,26 +91,29 @@ class ProductViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'])
     def search(self, request):
         queryset = Product.objects.all()
-        category = request.query_params.get('category')
-        gender = request.query_params.get('gender')
-        brand = request.query_params.get('brand')
-        price_min = request.query_params.get('price_min')
-        price_max = request.query_params.get('price_max')
-        size = request.query_params.get('size')
-        color = request.query_params.get('color')
 
-        if category:
-            queryset = queryset.filter(category__name__icontains=category)
-        if gender:
-            queryset = queryset.filter(gender__type__icontains=gender)
-        if brand:
-            queryset = queryset.filter(brand__name__icontains=brand)
-        if price_min and price_max:
-            queryset = queryset.filter(price__gte=price_min, price__lte=price_max)
-        if size:
-            queryset = queryset.filter(size__size__icontains=size)
-        if color:
-            queryset = queryset.filter(color__name__icontains=color)
+        filters = {
+            'category__name__icontains': request.query_params.get('category'),
+            'gender__type__icontains': request.query_params.get('gender'),
+            'brand__name__icontains': request.query_params.get('brand'),
+            'size__size__icontains': request.query_params.get('size'),
+            'color__name__icontains': request.query_params.get('color'),
+        }
+
+        for field, value in filters.items():
+            if value:
+                queryset = queryset.filter(**{field: value})
+
+        try:
+            price_min = request.query_params.get('price_min')
+            if price_min is not None:
+                queryset = queryset.filter(price__gte=float(price_min))
+
+            price_max = request.query_params.get('price_max')
+            if price_max is not None:
+                queryset = queryset.filter(price__lte=float(price_max))
+        except ValueError:
+            return Response({"error": "Price filters must be valid numbers."}, status=status.HTTP_400_BAD_REQUEST)
 
         serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)
@@ -140,21 +144,51 @@ class DiscountViewSet(viewsets.ModelViewSet):
 
 
 class OrderViewSet(viewsets.ModelViewSet):
-    queryset = Order.objects.all()
     serializer_class = OrderSerializer
     permission_classes = [IsAuthenticated]
 
+    def get_queryset(self):
+        if self.request.user.groups.filter(name__in=["Admin", "Advanced User"]).exists():
+            return Order.objects.all()
+        return Order.objects.filter(user=self.request.user)
+
     def perform_create(self, serializer):
-        user = self.request.data.get('user')
-        if not user:
-            raise ValidationError({"user": "This field is required."})
+        order_details_data = self.request.data.get('order_details', [])
+        with transaction.atomic():
+            order = serializer.save(user=self.request.user)
 
-        try:
-            user_obj = User.objects.get(id=user)
-        except User.DoesNotExist:
-            raise ValidationError({"user": "User does not exist."})
+            for detail in order_details_data:
+                product = get_object_or_404(Product, pk=detail.get('product'))
+                quantity = detail.get('quantity')
 
-        serializer.save(user=user_obj)
+                if not quantity or not product.update_stock(quantity):
+                    raise ValidationError(f"Insufficient stock for product: {product.name}.")
+
+                OrderDetail.objects.create(
+                    order=order,
+                    product=product,
+                    quantity=quantity,
+                    price_at_purchase=detail.get('price_at_purchase', product.price)
+                )
+
+    @action(detail=True, methods=['patch'])
+    def update_status(self, request, pk=None):
+        order = get_object_or_404(Order, pk=pk)
+
+        if not self.request.user.groups.filter(name__in=["Admin", "Advanced User"]).exists():
+            return Response({"error": "Permission denied."}, status=status.HTTP_403_FORBIDDEN)
+
+        new_status = request.data.get('status')
+        if new_status in dict(Order.STATUS_CHOICES).keys():
+            order.update_status(new_status)
+            return Response({'status': 'Order status updated'})
+        return Response({'error': 'Invalid status.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=False, methods=['get'])
+    def my_orders(self, request):
+        orders = self.get_queryset().filter(user=self.request.user)
+        serializer = self.get_serializer(orders, many=True)
+        return Response(serializer.data)
 
 
 class UserViewSet(viewsets.ModelViewSet):
@@ -179,7 +213,7 @@ class ReportViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ['daily_earnings', 'top_selling_products']:
-            return [IsAdmin(), IsAdvancedUser()]
+            return [IsAdvancedUser()]
         return [IsAuthenticated()]
 
     @action(detail=False, methods=['get'])

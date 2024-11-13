@@ -29,7 +29,6 @@ class ColorSerializer(serializers.ModelSerializer):
         fields = ['id', 'name']
 
 
-# Gender Serializer
 class GenderSerializer(serializers.ModelSerializer):
     class Meta:
         model = Gender
@@ -52,15 +51,11 @@ class ProductSerializer(serializers.ModelSerializer):
 
 
 class UserSerializer(serializers.ModelSerializer):
-    groups = serializers.SlugRelatedField(
-        many=True,
-        slug_field='name',
-        queryset=Group.objects.all()
-    )
+    groups = serializers.SlugRelatedField(many=True, slug_field='name', queryset=Group.objects.all())
 
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'groups', 'first_name', 'last_name', 'phone', 'address']
+        fields = ['id', 'username', 'email', 'groups', 'first_name', 'last_name']
 
 
 class OrderDetailSerializer(serializers.ModelSerializer):
@@ -108,7 +103,6 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     @classmethod
     def get_token(cls, user):
         token = super().get_token(user)
-        # Add custom claims
         token['groups'] = list(user.groups.values_list('name', flat=True))
         return token
 
