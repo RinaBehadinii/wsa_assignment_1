@@ -1,4 +1,4 @@
-# WSA Assignment 1 - Fullstack Web Store Application
+# Fullstack Web Store Application
 
 This repository contains both the frontend and backend code for an e-commerce platform. The backend is built using Django and Django REST Framework, while the frontend is built using ReactJS.
 
